@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>S-Line Photo Editor — Compact + Full-Res Export</title>
+<style>
+  :root{
+    --bg:#0b0c10; --card:#111218; --ink:#e7eaf0; --muted:#a9b1c3;
+    --accent:#e60012; --border:#23252f; --chip:#171924;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color: transparent}
+  html,body{height:100%;}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.45 system-ui,Segoe UI,Roboto,Arial;
+    overflow:hidden; /* no page scroll */
+  }
+  a{color:#7cc0ff;text-decoration:none}
+  a:hover{text-decoration:underline}
+
+  /* App grid: header toolbars + stage fill */
+  .app{
+    display:grid; grid-template-rows:auto auto 1fr; height:100vh; width:100vw;
+    gap:8px; padding:10px;
+  }
+  .toolbar{
+    display:flex; flex-wrap:wrap; gap:6px; align-items:center;
+    background:linear-gradient(180deg, rgba(230,0,18,.18), rgba(230,0,18,0) 65%);
+    border:1px solid var(--border); border-radius:12px; padding:8px 10px;
+  }
+  .controls{
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+    background:var(--card); border:1px solid var(--border); border-radius:12px; padding:8px 10px;
+  }
+  .spacer{flex:1}
+  .btn, .chip, .select, .number, .range, .color{
+    background:var(--chip); color:var(--ink); border:1px solid var(--border);
+    border-radius:10px; font-size:13px; height:34px;
+  }
+  .btn{padding:0 10px; cursor:pointer}
+  .btn.prim{background:var(--accent); color:white; border-color:#7a0b14}
+  .btn[disabled]{opacity:.5;cursor:not-allowed}
+  .chip{display:flex; align-items:center; padding:0 8px; gap:6px; color:var(--muted)}
+  .select, .number{padding:0 8px}
+  .range{height:28px}
+  .group{display:flex; align-items:center; gap:6px}
+  .label{color:var(--muted); font-size:12px}
+  .value{min-width:28px; text-align:right; color:#cdd3e0}
+  .divider{width:1px; height:22px; background:var(--border); margin:0 2px}
+  #stage{
+    position:relative; display:flex; align-items:center; justify-content:center;
+    background: repeating-conic-gradient(#181a23 0% 25%, #141621 0% 50%) 50% / 22px 22px;
+    border-radius:12px; border:1px solid var(--border); overflow:hidden;
+    touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none;
+  }
+  canvas{display:block; max-width:100%; max-height:100%; width:100%; height:auto; touch-action:none}
+  .dropzone{ text-align:center; padding:24px; border:2px dashed #2b2f40; border-radius:10px; color:var(--muted) }
+  .status{color:var(--muted)}
+  .kbd{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12px; background:#171923; padding:2px 6px; border-radius:6px; border:1px solid var(--border)}
+  .pill{display:inline-block; padding:2px 8px; border-radius:999px; border:1px solid var(--border); background:#151724; color:var(--muted); font-size:12px;}
+  body.dragging{overflow:hidden} /* belt & suspenders */
+  @media (max-width: 880px){
+    .app{grid-template-rows:auto auto 1fr}
+    .value{display:none}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- Toolbar 1: File & actions (always visible) -->
+  <div class="toolbar">
+    <strong>S-Line Photo Editor</strong> <span class="pill">Compact</span>
+    <div class="divider"></div>
+    <label class="btn">
+      <input id="fileInput" type="file" accept="image/*" hidden>
+      Upload
+    </label>
+    <button id="newBtn" class="btn">Start</button>
+    <button id="finishBtn" class="btn" style="display:none">Finish</button>
+    <button id="deleteBtn" class="btn" disabled>Delete</button>
+    <button id="clearBtn" class="btn" disabled>Clear</button>
+    <div class="divider"></div>
+    <button id="undoBtn" class="btn" disabled>Undo</button>
+    <button id="redoBtn" class="btn" disabled>Redo</button>
+    <div class="spacer"></div>
+    <span id="status" class="status">No image loaded.</span>
+    <div class="divider"></div>
+    <button id="exportBtn" class="btn prim" disabled>Export PNG</button>
+  </div>
+
+  <!-- Toolbar 2: All controls in one compact row (no scrolling) -->
+  <div class="controls">
+    <!-- Mode & count -->
+    <div class="group">
+      <span class="label">Mode</span>
+      <select id="mode" class="select">
+        <option value="single">Single</option>
+        <option value="fanToTop">Fan→Top</option>
+        <option value="convergeFromTop">Top→Many</option>
+      </select>
+    </div>
+    <div class="group">
+      <span class="label">N</span>
+      <input id="count" class="number" type="number" min="1" max="24" step="1" value="5" style="width:62px">
+    </div>
+    <div class="group">
+      <label style="display:flex;align-items:center;gap:6px;"><input id="lockTop" type="checkbox" checked> <span class="label">LockTop</span></label>
+    </div>
+    <div class="group">
+      <span class="label">TopM</span>
+      <input id="topMargin" class="number" type="number" min="0" max="0.2" step="0.01" value="0.05" style="width:70px">
+    </div>
+
+    <div class="divider"></div>
+
+    <!-- Style -->
+    <div class="group">
+      <span class="label">Color</span>
+      <input id="color" type="color" class="color" value="#e60012" style="width:42px">
+    </div>
+    <div class="group">
+      <span class="label">Th</span>
+      <input id="thickness" class="range" type="range" min="1" max="20" step="1" value="8">
+      <span id="thicknessVal" class="value">8</span>
+    </div>
+    <div class="group">
+      <span class="label">Glow</span>
+      <input id="glow" class="range" type="range" min="0" max="36" step="1" value="16">
+      <span id="glowVal" class="value">16</span>
+    </div>
+    <div class="group">
+      <span class="label">Ht</span>
+      <input id="height" class="range" type="range" min="-1" max="1" step="0.01" value="0.5">
+      <span id="heightVal" class="value">0.50</span>
+    </div>
+    <div class="group">
+      <span class="label">Sag</span>
+      <input id="sag" class="range" type="range" min="-1" max="1" step="0.01" value="-0.3">
+      <span id="sagVal" class="value">-0.30</span>
+    </div>
+    <div class="group">
+      <span class="label">Wig</span>
+      <input id="wiggle" class="range" type="range" min="0" max="0.25" step="0.005" value="0.02">
+      <span id="wiggleVal" class="value">0.020</span>
+    </div>
+  </div>
+
+  <!-- Stage fills the remaining viewport height -->
+  <div id="stage">
+    <div id="drop" class="dropzone">
+      <p><strong>Drop an image here</strong> or use <em>Upload</em></p>
+      <p class="status">PNG • JPG • HEIC (browser support varies)</p>
+    </div>
+    <canvas id="canvas" width="960" height="640" style="display:none"></canvas>
+  </div>
+</div>
+
+<script>
+(()=>{
+const IS_TOUCH = ('ontouchstart' in window) || navigator.maxTouchPoints>0;
+
+/** ---------- Elems ---------- **/
+const $ = sel => document.querySelector(sel);
+const canvas = $("#canvas");
+const ctx = canvas.getContext("2d");
+const fileInput = $("#fileInput");
+const drop = $("#drop");
+const stage = $("#stage");
+const statusEl = $("#status");
+
+const modeSel = $("#mode");
+const countInput = $("#count");
+const newBtn = $("#newBtn");
+const finishBtn = $("#finishBtn");
+const deleteBtn = $("#deleteBtn");
+const clearBtn = $("#clearBtn");
+const undoBtn = $("#undoBtn");
+const redoBtn = $("#redoBtn");
+const exportBtn = $("#exportBtn");
+const lockTopChk = $("#lockTop");
+const topMarginInput = $("#topMargin");
+
+const controls = {
+  color: $("#color"),
+  thickness: $("#thickness"),
+  glow: $("#glow"),
+  height: $("#height"),
+  sag: $("#sag"),
+  wiggle: $("#wiggle"),
+  thicknessVal: $("#thicknessVal"),
+  glowVal: $("#glowVal"),
+  heightVal: $("#heightVal"),
+  sagVal: $("#sagVal"),
+  wiggleVal: $("#wiggleVal")
+};
+
+/** ---------- Utils ---------- **/
+const clamp = (v,min,max)=>Math.max(min,Math.min(max,v));
+const dist = (a,b)=>Math.hypot(a.x-b.x, a.y-b.y);
+
+/** ---------- State ---------- **/
+let state = {
+  image: null, imgNatural: {w:0,h:0},
+  fit: {x:0,y:0,w:0,h:0, scale:1},
+  lines: [], selectedId: null,
+  ui: { tool: "idle", placingPoint: null, drag:{type:null, lineId:null, point:null, startRel:null},
+        pending:{ count:0, topAnchor:null } },
+  style: { color:"#e60012", thickness:8, glow:16, height:0.5, sag:-0.3, wiggle:0.02 },
+  history: { past:[], future:[] }
+};
+let idCounter = 1;
+
+const HANDLE_R = IS_TOUCH ? 10 : 6;
+const PICK_NEAR = IS_TOUCH ? 20 : 12;
+const HANDLE_PICK = IS_TOUCH ? 18 : 10;
+
+function snapshot(){
+  const snap = JSON.stringify({ lines: state.lines, selectedId: state.selectedId, style: state.style });
+  state.history.past.push(snap);
+  if(state.history.past.length>50) state.history.past.shift();
+  state.history.future.length = 0;
+  updateUndoRedoButtons();
+}
+function restore(snapStr){
+  const snap = JSON.parse(snapStr);
+  state.lines = snap.lines; state.selectedId = snap.selectedId; state.style = snap.style;
+  syncControlsFromStyle(); render();
+}
+
+/** ---------- Layout / Canvas Fit ---------- **/
+function setCanvasSizeToDisplay(){
+  // Stage inner size
+  const r = stage.getBoundingClientRect();
+  const padding = 16; // internal safe padding
+  const wCss = Math.max(320, Math.floor(r.width - padding));
+  const hCss = Math.max(220, Math.floor(r.height - padding));
+  const dpr = window.devicePixelRatio || 1;
+
+  canvas.style.display = state.image ? "block" : "none";
+  drop.style.display = state.image ? "none" : "block";
+
+  // Size the backing store to CSS pixels * DPR for crispness
+  canvas.width = Math.floor(wCss * dpr);
+  canvas.height = Math.floor(hCss * dpr);
+  canvas.style.width = wCss+"px";
+  canvas.style.height = hCss+"px";
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+
+  if(state.image){
+    const scale = Math.min((wCss)/state.imgNatural.w, (hCss)/state.imgNatural.h);
+    const cw = Math.floor(state.imgNatural.w * scale);
+    const ch = Math.floor(state.imgNatural.h * scale);
+    const padX = Math.max(0, (wCss - cw)/2);
+    const padY = Math.max(0, (hCss - ch)/2);
+    state.fit = { x: padX, y: padY, w: cw, h: ch, scale };
+  }
+  render();
+}
+window.addEventListener("resize", ()=>{ setCanvasSizeToDisplay(); });
+
+/** ---------- Image IO ---------- **/
+function loadImageFromFile(file){
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = ()=>{
+    state.image = img; state.imgNatural = { w: img.naturalWidth, h: img.naturalHeight };
+    statusEl.textContent = `Image: ${img.naturalWidth}×${img.naturalHeight}`;
+    exportBtn.disabled = false;
+    setCanvasSizeToDisplay();
+    clearBtn.disabled = state.lines.length===0;
+  };
+  img.onerror = ()=>{ statusEl.textContent = "Failed to load image."; };
+  img.src = url;
+}
+fileInput.addEventListener("change", e=>{
+  const f = e.target.files?.[0];
+  if(f) loadImageFromFile(f);
+});
+["dragenter","dragover"].forEach(evt => drop.addEventListener(evt, e=>{
+  e.preventDefault(); e.stopPropagation(); drop.style.borderColor="#4b5563";
+}));
+["dragleave","dragend","drop"].forEach(evt => drop.addEventListener(evt, e=>{
+  e.preventDefault(); e.stopPropagation(); drop.style.borderColor="#2b2f40";
+}));
+drop.addEventListener("drop", e=>{
+  const f = e.dataTransfer.files?.[0];
+  if(f) loadImageFromFile(f);
+});
+
+/** ---------- Mapping ---------- **/
+function canvasToRel(pt){
+  const {x,y,w,h} = state.fit;
+  return { x: clamp((pt.x - x) / w, 0, 1), y: clamp((pt.y - y) / h, 0, 1) };
+}
+function relToCanvas(pt){
+  const {x,y,w,h} = state.fit;
+  return { x: x + pt.x * w, y: y + pt.y * h };
+}
+
+/** ---------- Modes helpers ---------- **/
+function topAnchors(count, margin){
+  const m = clamp(margin, 0, 0.2);
+  const arr=[]; const span = 1 - 2*m;
+  for(let i=0;i<count;i++){
+    const x = m + (i+1)/(count+1) * span;
+    arr.push({ x, y: 0 });
+  }
+  return arr;
+}
+function addLineWithMeta(aRel,bRel, meta={}){
+  const line = {
+    id: idCounter++,
+    a: aRel, b: bRel,
+    height: state.style.height, sag: state.style.sag, wiggle: state.style.wiggle,
+    color: state.style.color, thickness: state.style.thickness, glow: state.style.glow,
+    lockAtoTop: !!meta.lockAtoTop, lockBtoTop: !!meta.lockBtoTop
+  };
+  state.lines.push(line); state.selectedId = line.id;
+  clearBtn.disabled = state.lines.length===0; deleteBtn.disabled = !state.selectedId;
+}
+function createFanToTop(baseRel){
+  const n = clamp(parseInt(countInput.value||"1",10), 1, 24);
+  const margin = parseFloat(topMarginInput.value||"0");
+  const anchors = topAnchors(n, margin);
+  snapshot();
+  for(const t of anchors){ addLineWithMeta(baseRel, t, { lockBtoTop: lockTopChk.checked }); }
+  render();
+}
+function startConvergeFromTop(topRel){
+  const n = clamp(parseInt(countInput.value||"1",10), 1, 24);
+  state.ui.pending.count = n;
+  state.ui.pending.topAnchor = { x: clamp(topRel.x, 0,1), y: 0 };
+  state.ui.tool = "adding-converge";
+  finishBtn.style.display = "inline-block";
+  updateStatus();
+}
+function addConvergePoint(ptRel){
+  addLineWithMeta(state.ui.pending.topAnchor, ptRel, { lockAtoTop: lockTopChk.checked });
+  state.ui.pending.count--;
+  if(state.ui.pending.count<=0){ endAdding(); } else { updateStatus(); }
+}
+function endAdding(){
+  state.ui.tool = "idle"; state.ui.placingPoint = null;
+  state.ui.pending = { count:0, topAnchor:null };
+  newBtn.classList.remove("prim");
+  finishBtn.style.display = "none";
+  snapshot(); render(); updateStatus();
+}
+
+/** ---------- Draw ---------- **/
+function sampleCurve(line, steps=64){
+  const A = relToCanvas(line.a);
+  const B = relToCanvas(line.b);
+  const vx = B.x - A.x, vy = B.y - A.y;
+  const d = Math.hypot(vx,vy) || 1;
+  const nx = -vy/d, ny = vx/d;
+  const M = { x: (A.x+B.x)/2, y:(A.y+B.y)/2 };
+  const bulge = line.height * d * 0.5;
+  const offset = line.sag * d * 0.25;
+  const C = { x: M.x + nx*(bulge+offset), y: M.y + ny*(bulge+offset) };
+  const pts = [];
+  for(let i=0;i<=steps;i++){
+    const t = i/steps;
+    const x = (1-t)*(1-t)*A.x + 2*(1-t)*t*C.x + t*t*B.x;
+    const y = (1-t)*(1-t)*A.y + 2*(1-t)*t*C.y + t*t*B.y;
+    const amp = line.wiggle * d;
+    const wig = Math.sin(t*Math.PI*6) * amp;
+    pts.push({ x: x + nx*wig, y: y + ny*wig });
+  }
+  return pts;
+}
+function drawLine(line, showHandles){
+  const pts = sampleCurve(line, 96);
+  ctx.lineJoin = "round"; ctx.lineCap = "round";
+
+  if(line.glow > 0){
+    ctx.save();
+    ctx.shadowBlur = line.glow; ctx.shadowColor = line.color;
+    ctx.strokeStyle = line.color; ctx.lineWidth = Math.max(1, line.thickness);
+    ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
+    for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.stroke(); ctx.restore();
+  }
+  ctx.strokeStyle = line.color; ctx.lineWidth = Math.max(1, line.thickness);
+  ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
+  for(let i=1;i<pts.length;i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.stroke();
+
+  // handles
+  const A = relToCanvas(line.a), B = relToCanvas(line.b);
+  const r = HANDLE_R;
+  if(showHandles){
+    ctx.fillStyle = "#60a5fa"; ctx.strokeStyle="#0f172a"; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(A.x, A.y, r, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = "#34d399";
+    ctx.beginPath(); ctx.arc(B.x, B.y, r, 0, Math.PI*2); ctx.fill(); ctx.stroke();
+  }
+}
+function render(){
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.width / dpr, h = canvas.height / dpr;
+  ctx.clearRect(0,0,w,h);
+  ctx.fillStyle = "#0f111a80"; ctx.fillRect(0,0,w,h);
+  if(state.image){
+    const {x,y,w:iw,h:ih} = state.fit;
+    ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(state.image, 0,0, state.imgNatural.w, state.imgNatural.h, x,y, iw, ih);
+  }
+  for(const line of state.lines){ drawLine(line, line.id===state.selectedId); }
+  updateStatus();
+}
+function updateStatus(){
+  const parts = [];
+  if(state.image) parts.push(`Canvas ${Math.round(canvas.clientWidth)}×${Math.round(canvas.clientHeight)}`);
+  parts.push(`Lines ${state.lines.length}`);
+  if(state.selectedId) parts.push(`#${state.selectedId}`);
+  if(state.ui.tool!=="idle") parts.push(`Mode ${state.ui.tool}`);
+  statusEl.textContent = parts.join(" • ");
+}
+
+/** ---------- Controls Binding ---------- **/
+function syncControlsFromStyle(){
+  const s = state.style;
+  controls.color.value = s.color;
+  controls.thickness.value = s.thickness; controls.thicknessVal.textContent = s.thickness;
+  controls.glow.value = s.glow; controls.glowVal.textContent = s.glow;
+  controls.height.value = s.height; controls.heightVal.textContent = s.height.toFixed(2);
+  controls.sag.value = s.sag; controls.sagVal.textContent = s.sag.toFixed(2);
+  controls.wiggle.value = s.wiggle; controls.wiggleVal.textContent = s.wiggle.toFixed(3);
+}
+syncControlsFromStyle();
+function applyStyleToSelected(){
+  const sel = state.lines.find(l=>l.id===state.selectedId); if(!sel) return;
+  Object.assign(sel, {
+    color: state.style.color, thickness: state.style.thickness, glow: state.style.glow,
+    height: state.style.height, sag: state.style.sag, wiggle: state.style.wiggle
+  });
+  snapshot(); render();
+}
+for(const [key,input] of Object.entries({
+  color: controls.color, thickness: controls.thickness, glow: controls.glow,
+  height: controls.height, sag: controls.sag, wiggle: controls.wiggle
+})){
+  input.addEventListener("input", e=>{
+    const v = input.type==="color" ? input.value :
+      (input.step && input.step.indexOf(".")>-1 ? parseFloat(input.value) : parseInt(input.value,10));
+    state.style[key] = v;
+    if(key==="thickness") controls.thicknessVal.textContent = v;
+    if(key==="glow") controls.glowVal.textContent = v;
+    if(key==="height") controls.heightVal.textContent = v.toFixed(2);
+    if(key==="sag") controls.sagVal.textContent = v.toFixed(2);
+    if(key==="wiggle") controls.wiggleVal.textContent = v.toFixed(3);
+    applyStyleToSelected(); render();
+  }, { passive: true });
+}
+
+/** ---------- Picking & Interaction ---------- **/
+function pointNear(p, q, radius){ return dist(p,q) <= radius; }
+function pickHandle(mouse){
+  for(let i=state.lines.length-1;i>=0;i--){
+    const line = state.lines[i];
+    const A = relToCanvas(line.a), B = relToCanvas(line.b);
+    if(pointNear(mouse, A, HANDLE_PICK)) return { line, point:"a" };
+    if(pointNear(mouse, B, HANDLE_PICK)) return { line, point:"b" };
+  }
+  return null;
+}
+function pickLine(mouse){
+  // Distance to polyline
+  let best=null, bestDist=PICK_NEAR;
+  for(const line of state.lines){
+    const pts = sampleCurve(line, 48);
+    for(let i=0;i<pts.length-1;i++){
+      const p=pts[i], q=pts[i+1];
+      const vx=q.x-p.x, vy=q.y-p.y;
+      const wx=mouse.x-p.x, wy=mouse.y-p.y;
+      const t = clamp((vx*wx+vy*wy)/((vx*vx+vy*vy)||1), 0, 1);
+      const cx = p.x + t*vx, cy = p.y + t*vy;
+      const dd = Math.hypot(mouse.x-cx, mouse.y-cy);
+      if(dd < bestDist){ bestDist = dd; best = line; }
+    }
+  }
+  return best;
+}
+
+function startTool(){
+  if(!state.image){ alert("Upload an image first."); return; }
+  newBtn.classList.add("prim");
+  const mode = modeSel.value;
+  if(mode==="single") state.ui.tool = "adding-single";
+  else if(mode==="fanToTop") state.ui.tool = "adding-fan";
+  else state.ui.tool = "adding-converge-wait-top";
+  updateStatus();
+}
+function endTool(){ endAdding(); }
+newBtn.addEventListener("click", ()=>{ if(state.ui.tool==="idle") startTool(); else endTool(); });
+finishBtn.addEventListener("click", ()=> endAdding());
+
+["touchstart","touchmove","touchend","touchcancel"].forEach(type=>{
+  canvas.addEventListener(type, e=>{ e.preventDefault(); }, { passive:false });
+});
+
+function getPos(evt){
+  const rect = canvas.getBoundingClientRect();
+  const x = (evt.clientX ?? evt.touches?.[0]?.clientX) - rect.left;
+  const y = (evt.clientY ?? evt.touches?.[0]?.clientY) - rect.top;
+  return {x,y};
+}
+
+function onPointerDown(e){
+  if(!state.image) return;
+  e.preventDefault(); document.body.classList.add("dragging");
+  const pos = getPos(e); const rel = canvasToRel(pos);
+
+  // Tool flows
+  if(state.ui.tool==="adding-single"){
+    if(!state.ui.placingPoint){ state.ui.placingPoint = rel; updateStatus(); return; }
+    snapshot(); addLineWithMeta(state.ui.placingPoint, rel, {}); endAdding(); return;
+  }
+  if(state.ui.tool==="adding-fan"){ snapshot(); createFanToTop(rel); endAdding(); return; }
+  if(state.ui.tool==="adding-converge-wait-top"){ startConvergeFromTop(rel); return; }
+  if(state.ui.tool==="adding-converge"){ snapshot(); addConvergePoint(rel); render(); return; }
+
+  const handle = pickHandle(pos);
+  if(handle){
+    state.selectedId = handle.line.id; deleteBtn.disabled = false;
+    state.ui.tool = "dragging"; state.ui.drag = { type:"handle", lineId: handle.line.id, point: handle.point, startRel: rel };
+    snapshot(); render(); return;
+  }
+  const line = pickLine(pos);
+  if(line){
+    state.selectedId = line.id; deleteBtn.disabled = false;
+    state.ui.tool = "dragging"; state.ui.drag = { type:"move-line", lineId: line.id, startRel: rel };
+    snapshot(); render(); return;
+  }
+  state.selectedId = null; deleteBtn.disabled = true; render();
+}
+function onPointerMove(e){
+  if(state.ui.tool!=="dragging") return;
+  e.preventDefault();
+  const pos = getPos(e); const rel = canvasToRel(pos);
+  const line = state.lines.find(l=>l.id===state.ui.drag.lineId); if(!line) return;
+  if(state.ui.drag.type==="handle"){
+    const p = state.ui.drag.point;
+    let next = { x: rel.x, y: rel.y };
+    if((p==="a" && line.lockAtoTop) || (p==="b" && line.lockBtoTop)) next.y = 0;
+    line[p] = next; render();
+  }else if(state.ui.drag.type==="move-line"){
+    const start = state.ui.drag.startRel;
+    const dx = rel.x - start.x, dy = rel.y - start.y;
+    const nyA = line.lockAtoTop ? 0 : clamp(line.a.y + dy, 0, 1);
+    const nyB = line.lockBtoTop ? 0 : clamp(line.b.y + dy, 0, 1);
+    line.a = { x: clamp(line.a.x + dx, 0,1), y: nyA };
+    line.b = { x: clamp(line.b.x + dx, 0,1), y: nyB };
+    state.ui.drag.startRel = rel; render();
+  }
+}
+function onPointerUp(e){
+  if(state.ui.tool==="dragging"){
+    state.ui.tool = "idle"; state.ui.drag = {type:null,lineId:null,point:null,startRel:null};
+  }
+  document.body.classList.remove("dragging");
+}
+canvas.addEventListener("pointerdown", onPointerDown, { passive:false });
+canvas.addEventListener("pointermove", onPointerMove, { passive:false });
+window.addEventListener("pointerup", onPointerUp, { passive:false });
+
+// Delete / Undo / Redo
+deleteBtn.addEventListener("click", ()=>{
+  if(!state.selectedId) return;
+  snapshot();
+  state.lines = state.lines.filter(l=>l.id!==state.selectedId);
+  state.selectedId = null; deleteBtn.disabled = true;
+  clearBtn.disabled = state.lines.length===0; render();
+});
+clearBtn.addEventListener("click", ()=>{
+  if(state.lines.length===0) return;
+  snapshot(); state.lines = []; state.selectedId = null;
+  deleteBtn.disabled = true; clearBtn.disabled = true; render();
+});
+undoBtn.addEventListener("click", ()=>{
+  if(state.history.past.length===0) return;
+  const snap = state.history.past.pop();
+  state.history.future.push(JSON.stringify({ lines: state.lines, selectedId: state.selectedId, style: state.style }));
+  restore(snap); updateUndoRedoButtons();
+});
+redoBtn.addEventListener("click", ()=>{
+  if(state.history.future.length===0) return;
+  const snap = state.history.future.pop();
+  state.history.past.push(JSON.stringify({ lines: state.lines, selectedId: state.selectedId, style: state.style }));
+  restore(snap); updateUndoRedoButtons();
+});
+function updateUndoRedoButtons(){
+  undoBtn.disabled = state.history.past.length===0;
+  redoBtn.disabled = state.history.future.length===0;
+}
+
+/** ---------- Full-Resolution Export ---------- **/
+exportBtn.addEventListener("click", ()=>{
+  if(!state.image) return;
+  const W = state.imgNatural.w;
+  const H = state.imgNatural.h;
+  const off = document.createElement("canvas");
+  off.width = W; off.height = H;
+  const ox = off.getContext("2d");
+
+  // draw original image at native resolution (no scaling)
+  ox.imageSmoothingEnabled = true; ox.imageSmoothingQuality = "high";
+  ox.drawImage(state.image, 0, 0, W, H);
+
+  // thickness/glow scale so it matches on-screen appearance
+  const scaleFactor = (state.fit.w > 0) ? (W / state.fit.w) : 1;
+
+  function relToNat(pt){ return { x: pt.x * W, y: pt.y * H }; }
+
+  function sampleForExport(line, steps=128){
+    const A = relToNat(line.a), B = relToNat(line.b);
+    const vx = B.x - A.x, vy = B.y - A.y; const d = Math.hypot(vx,vy) || 1;
+    const nx = -vy/d, ny = vx/d;
+    const M = { x: (A.x+B.x)/2, y:(A.y+B.y)/2 };
+    const bulge = line.height * d * 0.5;
+    const offset = line.sag * d * 0.25;
+    const C = { x: M.x + nx*(bulge+offset), y: M.y + ny*(bulge+offset) };
+    const pts = [];
+    for(let i=0;i<=steps;i++){
+      const t = i/steps;
+      const x = (1-t)*(1-t)*A.x + 2*(1-t)*t*C.x + t*t*B.x;
+      const y = (1-t)*(1-t)*A.y + 2*(1-t)*t*C.y + t*t*B.y;
+      const amp = line.wiggle * d;
+      const wig = Math.sin(t*Math.PI*6) * amp;
+      pts.push({ x: x + nx*wig, y: y + ny*wig });
+    }
+    return pts;
+  }
+
+  for(const line of state.lines){
+    const pts = sampleForExport(line);
+    // Glow
+    if(line.glow>0){
+      ox.save();
+      ox.shadowBlur = line.glow * scaleFactor;
+      ox.shadowColor = line.color;
+      ox.strokeStyle = line.color;
+      ox.lineWidth = Math.max(1, line.thickness * scaleFactor);
+      ox.beginPath(); ox.moveTo(pts[0].x, pts[0].y);
+      for(let i=1;i<pts.length;i++) ox.lineTo(pts[i].x, pts[i].y);
+      ox.stroke();
+      ox.restore();
+    }
+    // Core
+    ox.strokeStyle = line.color;
+    ox.lineWidth = Math.max(1, line.thickness * scaleFactor);
+    ox.lineJoin="round"; ox.lineCap="round";
+    ox.beginPath(); ox.moveTo(pts[0].x, pts[0].y);
+    for(let i=1;i<pts.length;i++) ox.lineTo(pts[i].x, pts[i].y);
+    ox.stroke();
+  }
+
+  const url = off.toDataURL("image/png");
+  const a = document.createElement("a");
+  a.href = url; a.download = "s-line-fullres.png"; a.click();
+});
+
+// Init
+setCanvasSizeToDisplay();
+
+})();</script>
+</body>
+</html>
