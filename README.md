@@ -1,9 +1,7 @@
 # S-Line Photo Editor (GPT-5 build)
 Touch-friendly canvas to draw “S-lines” with multi-line modes and full-resolution export.
 
-<p align="center">
-  <img src="assets/demo.gif" alt="S-Line Editor demo" width="720">
-</p>
+<video src="demo.mp4" autoplay loop muted playsinline></video>
 
 ## Features
 - Single, Fan→Top, Top→Many modes
